@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>✈ 像素飞行</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #1a1a2e;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    overflow: hidden;
+    font-family: 'Courier New', monospace;
+  }
+  #wrap {
+    position: relative;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+  }
+  canvas {
+    display: block;
+    image-rendering: pixelated;
+    image-rendering: crisp-edges;
+    border: 8px solid #333;
+    border-radius: 4px;
+    box-shadow: 0 0 40px rgba(255,200,100,0.3);
+  }
+  #info {
+    position: absolute;
+    bottom: -36px;
+    width: 100%;
+    text-align: center;
+    color: #8f8faa;
+    font-size: 13px;
+    letter-spacing: 2px;
+  }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c"></canvas>
+  <div id="info">⬛ PIXEL FLIGHT ⬛  PRESS ANY KEY TO PAUSE</div>
+</div>
+<script>
+(function() {
+  const W = 256, H = 192;   // 内部分辨率（接近 GBA）
+  const SCALE = 3;
+  const canvas = document.getElementById('c');
+  canvas.width = W;
+  canvas.height = H;
+  canvas.style.width = (W * SCALE) + 'px';
+  canvas.style.height = (H * SCALE) + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+
+  let t = 0, paused = false, planeX = 90, planeY = 72;
+
+  // ── 调色板 ──
+  const C = {
+    skyT: '#9bbcfa', skyB: '#c4d9ff',
+    sun: '#f8e840', sunR: '#f0c820',
+    cloud1:'#ffffff', cloud2:'#e0e8ff', cloud3:'#c8d4f0',
+    ground:'#5a9e4b', groundD:'#3d7a30', groundL:'#7cc464',
+    body:'#e84040', bodyD:'#b82828', bodyL:'#ff6060',
+    wing:'#f8c840', wingD:'#c89820',
+    glass:'#60d0f8', glassS:'#a0e8ff',
+    prop:'#8b5e3c', propD:'#5a3820',
+    kidH:'#f8d098', kidS:'#e0b878', kidE:'#404040',
+    stripe:'#ffffff',
+  };
+
+  // ── 辅助函数 ──
+  function rect(x,y,w,h,c) { ctx.fillStyle=c; ctx.fillRect(x,y,w,h); }
+  function px(x,y,c) { ctx.fillStyle=c; ctx.fillRect(x,y,1,1); }
+
+  // ── 天空 ──
+  function drawSky() {
+    for (let y=0; y<120; y++) {
+      const r = y/120;
+      const cr = lerpColor(C.skyB, C.skyT, r);
+      rect(0,y,W,1,cr);
+    }
+  }
+
+  function lerpColor(a,b,t) {
+    const ah=parseInt(a.slice(1),16), bh=parseInt(b.slice(1),16);
+    const ar=(ah>>16)&0xff, ag=(ah>>8)&0xff, ab=ah&0xff;
+    const br=(bh>>16)&0xff, bg=(bh>>8)&0xff, bb=bh&0xff;
+    const rr=Math.round(ar+(br-ar)*t), rg=Math.round(ag+(bg-ag)*t), rb=Math.round(ab+(bb-ab)*t);
+    return '#'+((1<<24)|(rr<<16)|(rg<<8)|rb).toString(16).slice(1);
+  }
+
+  // ── 像素圆（太阳） ──
+  function drawSun(cx,cy,r) {
+    for (let y=-r; y<=r; y++) {
+      for (let x=-r; x<=r; x++) {
+        if (x*x+y*y <= r*r+2) {
+          const d = Math.sqrt(x*x+y*y)/r;
+          const col = d>0.8 ? C.sunR : C.sun;
+          px(cx+x,cy+y,col);
+        }
+      }
+    }
+    // 光线
+    const rays = 12;
+    for (let i=0; i<rays; i++) {
+      const a = (i/rays)*Math.PI*2 + t*0.003;
+      const sx = cx + Math.cos(a)*(r+2);
+      const sy = cy + Math.sin(a)*(r+2);
+      for (let j=0; j<5; j++) {
+        px(Math.round(sx+Math.cos(a)*j), Math.round(sy+Math.sin(a)*j), j%2===0 ? C.sun : C.sunR);
+      }
+    }
+  }
+
+  // ── 像素云 ──
+  function getCloud(ox,oy,s) {
+    const cells = [];
+    // 主体 blob
+    const blob = [
+      [0,0,5,3],[1,-1,7,2],[2,-2,4,2],[3,0,6,2],[5,-1,4,2],
+    ];
+    for (const [bx,by,bw,bh] of blob) {
+      for (let y=0; y<bh; y++)
+        for (let x=0; x<bw; x++)
+          cells.push([bx+x-(s>>1), by+y-(s>>1)]);
+    }
+    // 去重
+    const seen = {};
+    const uniq = [];
+    for (const [x,y] of cells) {
+      const k = x+','+y;
+      if (!seen[k]) { seen[k]=true; uniq.push([x,y]); }
+    }
+    return { cells:uniq, ox, oy, s };
+  }
+
+  const clouds = [];
+  for (let i=0; i<5; i++) {
+    clouds.push(getCloud(
+      Math.random()*280-20,
+      8+Math.random()*70,
+      14+Math.random()*20
+    ));
+  }
+
+  function drawClouds() {
+    for (const cl of clouds) {
+      let cx = cl.ox - (t*0.4)%(W+60) + 30;
+      if (cx < -40) cx += W+80;
+      const cy = cl.oy + Math.sin(t*0.008+cl.ox)*2;
+      for (const [x,y] of cl.cells) {
+        const px2 = Math.round(cx+x), py2 = Math.round(cy+y);
+        if (px2>=0 && px2<W && py2>=0 && py2<H) {
+          const cc = (y<0) ? C.cloud1 : ((x+y)%3===0 ? C.cloud2 : C.cloud1);
+          px(px2, py2, cc);
+        }
+      }
+    }
+  }
+
+  // ── 地面 ──
+  function drawGround() {
+    rect(0,138,W,54,C.ground);
+    // 草皮纹理
+    for (let x=0; x<W; x+=3) {
+      for (let y=138; y<H; y+=3) {
+        if ((x+y)%5===0) px(x,y,C.groundD);
+        if ((x+y)%7===0) px(x+1,y+1,C.groundL);
+      }
+    }
+    // 顶部草丛
+    for (let x=0; x<W; x+=2) {
+      const h = 2+Math.abs(Math.sin(x*0.3+t*0.02))*3;
+      for (let j=0; j<h; j++) {
+        px(Math.round(x), 138-Math.round(j), j===0 ? C.groundL : C.ground);
+      }
+    }
+  }
+
+  // ── 飞机像素图 ──
+  function drawPlane(ox,oy) {
+    const sprite = [
+      // [x,y,'color_key']
+      // 机身（红色）
+      ...rect8(0,6, 28,10, 'body'),
+      // 机身亮面
+      ...rect8(1,6, 26,3, 'bodyL'),
+      // 机身暗面
+      ...rect8(0,14, 28,2, 'bodyD'),
+      // 机头
+      ...rect8(28,7, 8,8, 'bodyL'),
+      ...line8(36,7, 40,11, 'bodyL'),
+      ...line8(36,14, 40,11, 'bodyD'),
+      ...rect8(38,8, 4,6, 'body'),
+      // 尾翼
+      ...rect8(0,2, 6,4, 'bodyL'),
+      ...rect8(0,0, 3,2, 'body'),
+      // 尾翼竖
+      ...rect8(4,0, 3,6, 'wing'),
+      // 白色条纹
+      ...rect8(8,9, 18,2, 'stripe'),
+      // 机翼（黄色）
+      ...rect8(10,3, 14,3, 'wing'),
+      ...rect8(12,1, 10,2, 'wing'),
+      // 机翼暗面
+      ...rect8(10,5, 14,1, 'wingD'),
+      // 驾驶舱玻璃（蓝色半透明感）
+      ...rect8(26,8, 10,5, 'glass'),
+      ...line8(27,8, 32,8, 'glassS'),
+      // 玻璃反光
+      px8(28,9, 'glassS'),
+      px8(30,9, 'glassS'),
+      // 小孩头部
+      ...rect8(30,9, 4,4, 'kidH'),
+      // 小孩头发
+      ...rect8(30,8, 3,1, 'kidE'),
+      px8(29,9, 'kidE'),
+      // 小孩眼睛
+      px8(31,10, 'kidE'),
+      px8(33,10, 'kidE'),
+      // 小孩笑脸
+      px8(31,12, 'kidE'),
+      px8(33,12, 'kidE'),
+      // 螺旋桨（旋转动画）
+      ...propeller(2, 11, t),
+      // 起落架
+      ...rect8(16,16, 2,3, 'propD'),
+      ...rect8(22,16, 2,3, 'propD'),
+      // 起落架轮子
+      ...rect8(14,19, 4,3, 'prop'),
+      ...rect8(22,19, 4,3, 'prop'),
+    ];
+
+    for (const [sx,sy,ck] of sprite) {
+      const c = C[ck] || '#fff';
+      px(Math.round(ox+sx), Math.round(oy+sy), c);
+    }
+
+    // 引擎尾气
+    for (let i=0; i<3; i++) {
+      const ex = ox - 4 - i*3 - (t%6);
+      const ey = oy + 11 + Math.sin(t*0.3+i)*1;
+      if (ex>0 && ex<W) {
+        const alpha = 1 - i*0.3;
+        px(Math.round(ex), Math.round(ey), i===0 ? '#ffffff' : '#d0d0e0');
+      }
+    }
+  }
+
+  function rect8(x,y,w,h,ck) {
+    const a=[];
+    for (let dy=0; dy<h; dy++)
+      for (let dx=0; dx<w; dx++)
+        a.push([x+dx, y+dy, ck]);
+    return a;
+  }
+  function line8(x1,y1,x2,y2,ck) {
+    const a=[], dx=x2-x1, dy=y2-y1, s=Math.max(Math.abs(dx),Math.abs(dy));
+    for (let i=0; i<=s; i++) {
+      a.push([Math.round(x1+dx*i/s), Math.round(y1+dy*i/s), ck]);
+    }
+    return a;
+  }
+  function px8(x,y,ck) { return [[x,y,ck]]; }
+
+  function propeller(cx,cy,tick) {
+    const a = tick*0.6; // 旋转角度
+    const r = 8;
+    const pts = [];
+    // 两片桨叶
+    for (let b=0; b<2; b++) {
+      const aa = a + b*Math.PI;
+      for (let j=0; j<=r; j++) {
+        const px = cx + Math.cos(aa)*j;
+        const py = cy + Math.sin(aa)*j;
+        pts.push([Math.round(px), Math.round(py), 'prop']);
+        if (j===r) {
+          pts.push([Math.round(px+Math.cos(aa)), Math.round(py+Math.sin(aa)), 'propD']);
+        }
+      }
+    }
+    // 中心
+    pts.push([cx,cy,'propD']);
+    return pts;
+  }
+
+  // ── 像素鸟 ──
+  function drawBirds() {
+    const birds = [
+      [160, 50], [195, 35], [175, 62],
+    ];
+    for (const [bx,by] of birds) {
+      const frame = Math.floor(t/20)%3;
+      const wx = bx + Math.sin(t*0.01+bx)*10;
+      const wy = by + Math.cos(t*0.015+by)*4;
+      if (frame===0) {
+        px(Math.round(wx), Math.round(wy), C.propD);
+        px(Math.round(wx+2), Math.round(wy-1), C.propD);
+      } else if (frame===1) {
+        px(Math.round(wx+2), Math.round(wy), C.propD);
+        px(Math.round(wx), Math.round(wy-1), C.propD);
+      } else {
+        px(Math.round(wx+1), Math.round(wy), C.propD);
+        px(Math.round(wx+1), Math.round(wy-1), C.propD);
+      }
+    }
+  }
+
+  // ── 主循环 ──
+  function frame() {
+    if (!paused) t++;
+
+    // 飞机飞行路径
+    planeX = 85 + Math.sin(t*0.012)*55 + Math.sin(t*0.023)*15;
+    planeY = 58 + Math.cos(t*0.017)*20 + Math.sin(t*0.031)*8;
+
+    drawSky();
+    drawSun(215, 32, 18);
+    drawClouds();
+    drawBirds();
+    drawGround();
+    drawPlane(planeX, planeY);
+
+    // 标题
+    ctx.fillStyle = '#2a2040';
+    ctx.font = '8px "Courier New"';
+    ctx.fillText('PIXEL', 6, 20);
+    ctx.fillText('FLIGHT', 4, 29);
+
+    requestAnimationFrame(frame);
+  }
+
+  // ── 键盘暂停 ──
+  document.addEventListener('keydown', () => { paused = !paused; });
+  document.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    paused = !paused;
+  });
+
+  // 启动
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
