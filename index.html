@@ -278,6 +278,12 @@
     drawBirds();
     drawGround();
     drawPlane(planeX, planeY);
+
+    // 飞机上方文字
+    ctx.fillStyle = '#4a2060';
+    ctx.font = '6px "Courier New"';
+    ctx.fillText('amei我要飞~', planeX - 6, planeY - 4);
+
     drawTitle();
 
     requestAnimationFrame(frame);
